@@ -2,7 +2,7 @@
 
 ![altext](https://github.com/Will-J-Gale/Overwatch-AImbot/blob/master/Images/Overwatch%20AImbot%20FULL%20SIZE.gif)
 
-Overwatch AImbot detecting enemies and fireing at their heads
+Overwatch AImbot detecting enemies and firing at their heads
 
 ## Disclaimer
 This aimbot is purely experimental and intended for use in the training area only, not in real games  
