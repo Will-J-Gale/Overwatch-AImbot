@@ -272,9 +272,6 @@ with detection_graph.as_default():
             cv2.circle(image_np, normToCVScreen(closestEnemy['head']), 20, (0,0,255), -1) #EXPENSIVE!
           else:
             resetController(controller)
-            
-          cv2.imwrite("Images/{0:03}.jpg".format(index), image_np)
-          index += 1
         else:
           resetController(controller)
           
