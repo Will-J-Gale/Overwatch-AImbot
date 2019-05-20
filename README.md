@@ -19,7 +19,7 @@ This was created as an experiment using the Yolo V2 object detection algorithm.
    3. OpenCV
    4. Numpy
 
-##Yolo v2
+## Yolo v2
 This project utilized the Yolo V2 algorithm written in keras by:  
 Yolo2 Keras by experiencor: https://github.com/experiencor/keras-yolo2
 
