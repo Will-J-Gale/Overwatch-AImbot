@@ -1,291 +1,225 @@
+'''
+Yolo2 Keras by experiencor: https://github.com/experiencor/keras-yolo2
+
+Overwatch Settings:
+    1. Set display mode to WINDOWED
+    1. Set to resolution to 1280x720
+    2. Horizontal and Vertical Sensitivity: 100
+
+x360ce Settings:
+    1. Right Thumb
+        a: Sensitivity: 71% (Invert checked)
+'''
+import os
+import cv2
 import numpy as np
-import os, cv2, time
-import tensorflow as tf
+from utils import draw_boxes
+from frontend import YOLO
+import json
 from grabscreen import grab_screen
-from getkeys import key_check
-from collections import defaultdict
-from object_detection.utils import label_map_util
-from object_detection.utils import visualization_utils as vis_util
-from object_detection.utils import ops as utils_ops
 from vjoy import vJoy
+import math
 
-'''Google Object Detection API Code'''
-'''_________________________________________________________________________________________________________________________________________'''
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"]="0"
 
-if tf.__version__ < '1.4.0':
-  raise ImportError('Please upgrade your tensorflow installation to v1.4.* or later!')
+def sigmoid(x, scale=7):
+    return (1 / (1 + math.exp(-x*scale)) - 0.5)
 
-MODEL_NAME = 'OverwatchEnemy_Graph'
-#MODEL_NAME = 'ssd_mobilenet_v1_coco_2017_11_17'
-PATH_TO_CKPT = MODEL_NAME + '/frozen_inference_graph.pb'
-PATH_TO_LABELS = os.path.join('labels', 'object-detection.pbtxt')
-
-NUM_CLASSES = 1
-
-detection_graph = tf.Graph()
-with detection_graph.as_default():
-  od_graph_def = tf.GraphDef()
-  with tf.gfile.GFile(PATH_TO_CKPT, 'rb') as fid:
-    serialized_graph = fid.read()
-    od_graph_def.ParseFromString(serialized_graph)
-    tf.import_graph_def(od_graph_def, name='')
-
-label_map = label_map_util.load_labelmap(PATH_TO_LABELS)
-categories = label_map_util.convert_label_map_to_categories(label_map, max_num_classes=NUM_CLASSES, use_display_name=True)
-category_index = label_map_util.create_category_index(categories)
-
-def load_image_into_numpy_array(image):
-  (im_width, im_height) = image.size
-  return np.array(image.getdata()).reshape(
-      (im_height, im_width, 3)).astype(np.uint8)
-
-def run_inference_for_single_image(image, sess):
-  # Get handles to input and output tensors
-  ops = tf.get_default_graph().get_operations()
-  all_tensor_names = {output.name for op in ops for output in op.outputs}
-  tensor_dict = {}
-  for key in [
-      'num_detections', 'detection_boxes', 'detection_scores',
-      'detection_classes', 'detection_masks'
-  ]:
-    tensor_name = key + ':0'
-    if tensor_name in all_tensor_names:
-      tensor_dict[key] = tf.get_default_graph().get_tensor_by_name(
-          tensor_name)
-  if 'detection_masks' in tensor_dict:
-    # The following processing is only for single image
-    detection_boxes = tf.squeeze(tensor_dict['detection_boxes'], [0])
-    detection_masks = tf.squeeze(tensor_dict['detection_masks'], [0])
-    # Reframe is required to translate mask from box coordinates to image coordinates and fit the image size.
-    real_num_detection = tf.cast(tensor_dict['num_detections'][0], tf.int32)
-    detection_boxes = tf.slice(detection_boxes, [0, 0], [real_num_detection, -1])
-    detection_masks = tf.slice(detection_masks, [0, 0, 0], [real_num_detection, -1, -1])
-    detection_masks_reframed = utils_ops.reframe_box_masks_to_image_masks(
-        detection_masks, detection_boxes, image.shape[0], image.shape[1])
-    detection_masks_reframed = tf.cast(
-        tf.greater(detection_masks_reframed, 0.5), tf.uint8)
-    # Follow the convention by adding back the batch dimension
-    tensor_dict['detection_masks'] = tf.expand_dims(
-        detection_masks_reframed, 0)
-  image_tensor = tf.get_default_graph().get_tensor_by_name('image_tensor:0')
-
-  # Run inference
-  output_dict = sess.run(tensor_dict,
-                         feed_dict={image_tensor: np.expand_dims(image, 0)})
-
-  # all outputs are float32 numpy arrays, so convert types as appropriate
-  output_dict['num_detections'] = int(output_dict['num_detections'][0])
-  output_dict['detection_classes'] = output_dict[
-      'detection_classes'][0].astype(np.uint8)
-  output_dict['detection_boxes'] = output_dict['detection_boxes'][0]
-  output_dict['detection_scores'] = output_dict['detection_scores'][0]
-  if 'detection_masks' in output_dict:
-    output_dict['detection_masks'] = output_dict['detection_masks'][0]
-  return output_dict
-
-'''Custom Code'''
-'''_________________________________________________________________________________________________________________________________________'''
-
-def getEnemyPosition(boxes):
-  #Generates center positions from min and max box coordinates
-  #format: [ymin, xmin, ymax, xmax]
-  positions = []
-  
-  for box in boxes:
-    width = box[3] - box[1]
-    height = box[2] - box[0]
-
-    centerX = (box[1] + width / 2)
-    centerY = (box[0] + height / 2)
+def moveMouse(x,y):
+    win32api.mouse_event(win32con.MOUSEEVENTF_MOVE | win32con.MOUSEEVENTF_ABSOLUTE,
+                         int(x/1920*65535.0), int(y/1080*65535.0))
     
-    positions.append((centerX, centerY))
+def changeRange(value, minOld, maxOld, minNew, maxNew):
+    oldRange = maxOld - minOld
+    newRange = maxNew - minNew
+    return (((value - minOld) * newRange) / oldRange) + minNew
 
-  return positions
+def lookAtAndShootEnemy(controller, pos, shouldShoot):
 
-def getEnemyHitLocations(boxes):
-  #Generates HEAD and BODY positions from enemy positions
-  hitLocations = []
-  
-  for box in boxes:
-    width = box[3] - box[1]
-    height = box[2] - box[0]
-
-    centerX = (box[1] + width / 2)
-    centerY = (box[0] + height / 2)
-
-    headPosition = centerY - (height * 0.35)
-    hitLocation = {'head': (centerX, headPosition), 'body': (centerX, centerY)}
-    hitLocations.append(hitLocation)
-
-  return hitLocations
-
-def normToScreen(pos):
-  #Changes 0-1 value to 0-width and 0-height
-  x = int(pos[0] * WIDTH)
-  y = int(pos[1] * HEIGHT)
-  return (x, y)
-
-def normToCVScreen(pos):
-  #Changes 0-1 value to 0-scaledWidth and 0-scaledHeight
-  x = int(pos[0] * SCALED_SIZE[0])
-  y = int(pos[1] * SCALED_SIZE[1])
-  return (x, y)
-
-def getClosestEnemy(enemyPositions):
-  closestDistance = 100000000
-  closestEnemy = None
-
-  for enemy in enemyPositions:
-    pos = enemy['body']
-    screenPos = normToScreen(pos)
-    distance = abs(CENTER[0] - screenPos[0]) + abs(CENTER[1] - screenPos[1])
+    global UP, DOWN, LEFT, RIGHT
     
-    if(distance < closestDistance):
-      closestDistance = distance
-      closestEnemy = enemy
+    xDir = -(CENTER[0] - pos[0]) / WIDTH
+    yDir = -(CENTER[1] - pos[1]) / HEIGHT
 
-  return closestEnemy, closestDistance
+    scale=2
 
-def lookAtEnemy(controller, enemyPos, shoot = False):
-  #Aims at enemy
-  xDir = ((enemyPos[0] * 2) - 1)
-  yDir = (enemyPos[1] * 2) - 1
-
-  setJoy(controller, xDir, yDir, MOVE_SCALE, shoot)
-  #print(xDir, yDir)
-  
-def setJoy(controller, valueX, valueY, scale, shoot = False):
-  #Sends move commands to virtual Xbox 360 controller
-  if(shoot):
-    triggerPos = 32768
-  else:
-    triggerPos = 0
+    xDir = sigmoid(xDir) * scale
+    yDir = sigmoid(yDir) * scale
     
-  xPos = int(valueX*scale)
-  yPos = int(valueY*scale)
-  joystickPosition = controller.generateJoystickPosition(wAxisXRot = 16000+xPos, wAxisYRot = 16000+yPos, wAxisZRot = triggerPos)
-  controller.update(joystickPosition)
-  
-def shoot(trigger = True):
-  
-  if(trigger):
-    triggerPos = 32768
-  else:
-    triggerPos = 0
+##    if(xDir > 0.5):
+##        xDir = 0.5
+##    if(yDir > 0.5):
+##        yDir = 0.5
+
+##    if(xDir < DEAD_ZONE and xDir > 0):
+##        xDir = DEAD_ZONE
+##    elif(xDir < -DEAD_ZONE):
+##        xDir = -DEAD_ZONE
+##        
+##    if(yDir < DEAD_ZONE and yDir > 0):
+##        yDir = DEAD_ZONE
+##    elif(yDir < -DEAD_ZONE):
+##        yDir = -DEAD_ZONE
     
-  joystickPosition = controller.generateJoystickPosition()
-  controller.update(joystickPosition)
+    if(xDir > 0.5):
+        xDir = 0.5
+    elif(xDir < -0.5):
+        xDir = -0.5
+        
+    if(yDir > 0.5):
+        yDir = 0.5
+    elif(yDir < -0.5):
+        yDir = -0.5
+        
+    print(xDir, yDir)
+
+    setJoy(controller, xDir, yDir, shouldShoot, MOVE_SCALE)
+  
+def setJoy(controller, valueX, valueY, shouldShoot=False, scale=32768):
+    #Sends move commands to virtual Xbox 360 controller
+    xPos = int(changeRange(valueX, -1, 1, 0, 32768))
+    yPos = int(changeRange(valueY, -1, 1, 0, 32768))
+    rTrigger = 0
+    
+    if(shouldShoot):
+        rTrigger = 32768
+    
+    joystickPosition = controller.generateJoystickPosition(wAxisXRot=xPos,
+                                                           wAxisYRot=yPos,
+                                                           wAxisZRot=rTrigger)
+    controller.update(joystickPosition)
 
 def resetController(controller):
-  #Resets joystick to 0 position
-  joystickPosition = controller.generateJoystickPosition()
-  controller.update(joystickPosition)
-  
-def showFrameTime():
-  global previousTime
-  print(time.time() - previousTime)
-  previousTime = time.time()
-  
-#User Variables
-SCREEN_REGION = (0, 0, 1919, 1079) # Region of screen we will capture
-SCREEN_SIZE = (1920, 1080)
-WIDTH = 1920
-HEIGHT = 1080
+      #Resets joystick to 0 position
+      setJoy(controller, 0, 0, 0, 1)
 
-CENTER = (WIDTH/2, HEIGHT/2)
+def getClosestEnemy(enemyPositions, screenCenter):
+    closestDistance = 100000000
+    closestEnemy = None
 
-SCALED_SIZE = (800, 450)
-SCREEN_NAME = "OverwatchAI"
-previousTime = time.time()
-BOT_ENABLED = False
-L_DOWN = False #Press L to enable bot
-THRESHOLD = 0.5 #Keep only preduictions above 50%
-MOVE_SCALE = 20000 # Scales vJoy movement
-enemyPositions = []
-SHOOT_THRESHOLD = 200
+    for pos in enemyPositions:
+        distance = abs(screenCenter[0] - pos[0]) + abs(screenCenter[1] - pos[1])
 
-#Controller Variables    
-controller = vJoy()
-controller.open()
-resetController(controller)
+        if(distance < closestDistance):
+            closestDistance = distance
+            closestEnemy = pos
 
-index = 0
+    return closestEnemy, closestDistance
+      
+def getCenterOfBox(box, shape):
+    xmin = int(box.xmin * shape[1])
+    xmax = int(box.xmax * shape[1])
+    ymin = int(box.ymin * shape[0])
+    ymax = int(box.ymax * shape[0])
 
-with detection_graph.as_default():
-  with tf.Session() as sess:
+    width = abs(xmax - xmin)
+    height = abs(ymax - ymin)
+
+    centerX = xmin + (width//2)
+    centerY = ymin + (height//2)
+
+    return (centerX, centerY)
+
+if __name__ == '__main__':
+    #Yolo2 Code
+    #--------------------------------------------------------------------------------------------------------------------#
+    config_path  = "config.json"
+    weights_path = "YOLO_Overwatch.h5"
+
+    with open(config_path) as config_buffer:    
+        config = json.load(config_buffer)
+
+    ###############################
+    #   Make the model 
+    ###############################
+
+    yolo = YOLO(backend             = config['model']['backend'],
+                input_size          = config['model']['input_size'], 
+                labels              = config['model']['labels'], 
+                max_box_per_image   = config['model']['max_box_per_image'],
+                anchors             = config['model']['anchors'])
+
+    ###############################
+    #   Load trained weights
+    ###############################    
+
+    yolo.load_weights(weights_path)
+
+    ###############################
+    #   Predict bounding boxes 
+    ###############################
+
+
+    #Custom Code
+    #--------------------------------------------------------------------------------------------------------------------#
+    import time
+    import numpy as np
+
+    SCREEN_WIDTH = 1920
+    SCREEN_HEIGHT = 1080
+    SCREEN_CENTER_X = SCREEN_WIDTH // 2
+    SCREEN_CENTER_Y = SCREEN_HEIGHT // 2
+    
+    WIDTH = 1031
+    HEIGHT = 581
+    CENTER = (WIDTH//2, HEIGHT//2)
+    MOVE_SCALE = 32000
+    SCREEN_REGION = (454, 240, 1484, 820)
+    SHOOT_DISTANCE = 80
+    
+    controller = vJoy()
+    controller.open()
+    resetController(controller)
+
+    DEAD_ZONE = 0.2
+    index = 0
+
+    images = []
+
     while(True):
-
-        pressedKeys = key_check()
-
-        if len(pressedKeys) == 0:
-          L_DOWN = False
-        
-        for key in pressedKeys:
-          if(key == "L") and not L_DOWN:
-            L_DOWN = True
-            BOT_ENABLED = not BOT_ENABLED
-            print("Bot Enabled: {}".format(BOT_ENABLED))
+        try:
+            #DEBUG
+            #setJoy(controller, testVal, 0, False, MOVE_SCALE)
             
-        image_np = grab_screen(SCREEN_REGION)
-        image_np = cv2.resize(image_np, SCALED_SIZE)
-        image_np = cv2.cvtColor(image_np, cv2.COLOR_BGR2RGB)
-
-        if(BOT_ENABLED):
-
-          '''Google Object Detection API Code (Make predictions from image)'''
-          '''__________________________________________________________________________________________________________'''
-          # Expand dimensions since the model expects images to have shape: [1, None, None, 3]
-          image_np_expanded = np.expand_dims(image_np, axis=0)
-          # Actual detection.
-          output_dict = run_inference_for_single_image(image_np, sess)
-          # Visualization of the results of a detection.
-          
-          vis_util.visualize_boxes_and_labels_on_image_array(
-              image_np,
-              output_dict['detection_boxes'],
-              output_dict['detection_classes'],
-              output_dict['detection_scores'],
-              category_index,
-              instance_masks=output_dict.get('detection_masks'),
-              use_normalized_coordinates=True,
-              line_thickness=8)
-          
-          '''Custom Code (Find enemy positions and aim at enemy)'''
-          '''__________________________________________________________________________________________________________'''
-          bestScores = np.where(output_dict['detection_scores'] > THRESHOLD)
-          boxes =  [output_dict['detection_boxes'][i] for i in bestScores][0]
-          
-          enemyPositions = getEnemyPosition(boxes)
-          hitLocations = getEnemyHitLocations(boxes)
-          
-          if(len(enemyPositions) > 0):
-            closestEnemy, distance = getClosestEnemy(hitLocations)
+            screen = grab_screen(SCREEN_REGION)
+            screen = cv2.cvtColor(screen, cv2.COLOR_BGR2RGB)
             
-            if(distance <= SHOOT_THRESHOLD):
-              shoot = True
+            boxes = yolo.predict(screen)
+
+            enemyPositions = []
+            
+            if(len(boxes) > 0): 
+                screen = draw_boxes(screen, boxes, config['model']['labels'])
+                for box in boxes:
+                    centerPos = getCenterOfBox(box, screen.shape)
+                    enemyPositions.append(centerPos)
+
+                
+                closestEnemy, distance = getClosestEnemy(enemyPositions, CENTER)
+                cv2.circle(screen, closestEnemy, 15, (0, 0, 255), -1)
+                
+                shoot = False
+
+                if(distance < SHOOT_DISTANCE):
+                    shoot = True
+
+                lookAtAndShootEnemy(controller, closestEnemy, shoot)
+                
             else:
-              shoot = False
-              
-            lookAtEnemy(controller, closestEnemy['head'], shoot)
-            
-            cv2.circle(image_np, normToCVScreen(closestEnemy['body']), 20, (0,0,255), -1) #EXPENSIVE!
-            cv2.circle(image_np, normToCVScreen(closestEnemy['head']), 20, (0,0,255), -1) #EXPENSIVE!
-          else:
+                resetController(controller)
+                    
+            #screen = cv2.resize(screen, (0,0), fx=0.5, fy=0.5)
+            cv2.imshow("Overwatch AI", screen)
+            cv2.waitKey(1)
+            images.append(screen)
+        except KeyboardInterrupt:
             resetController(controller)
-        else:
-          resetController(controller)
-          
-        cv2.imshow(SCREEN_NAME, image_np) # EXPENSIVE!
-        showFrameTime()
-
-        
-        
-        if cv2.waitKey(25) & 0xFF == ord('q'):
-          cv2.destroyAllWindows()
-          break
-        
-        
-        
-        
-resetController(controller)
+            
+            for i in range(len(images)):
+                filename = f"Images/{i:05d}.png"
+                cv2.imwrite(filename, images[i])
+                
+            break
+            
 
