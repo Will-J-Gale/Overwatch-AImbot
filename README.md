@@ -5,7 +5,7 @@
 Overwatch AImbot detecting enemies and firing at their heads
 
 ## New Version
-A new version utilizing Yolov3 object detection is available here:  
+A new version utilizing Yolov2 object detection is available here:  
 https://github.com/Will-J-Gale/Overwatch-AImbot 
 
 ## Disclaimer
