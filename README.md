@@ -4,6 +4,10 @@
 
 Overwatch AImbot detecting enemies and firing at their heads
 
+## New Version
+A new version utilizing Yolov3 object detection is available here:  
+https://github.com/Will-J-Gale/Overwatch-AImbot 
+
 ## Disclaimer
 This aimbot is purely experimental and intended for use in the training area only, not in real games  
 It WILL NOT work in actual games as it has only been trained on training bot images  
