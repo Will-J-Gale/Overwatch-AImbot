@@ -1,6 +1,6 @@
 # Overwatch-AImbot
 
-![altext](https://github.com/Will-J-Gale/Overwatch-AImbot/blob/master/Images/Overwatch%20AImbot%20FULL%20SIZE.gif)
+![altext](https://github.com/Will-J-Gale/Overwatch-AImbot/blob/old-version/Images/Overwatch%20AImbot%20HALF%20SIZE.gif)
 
 Overwatch AImbot detecting enemies and firing at their heads
 
